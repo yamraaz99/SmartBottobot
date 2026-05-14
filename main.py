@@ -11,6 +11,8 @@ import logging
 import re
 import time
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from typing import Optional
@@ -582,6 +584,27 @@ async def on_bridge_group_message(update: Update, context: ContextTypes.DEFAULT_
 
 # ──────────────────────  STARTUP / SHUTDOWN  ─────────────────────────
 
+# ──────────────────────  STARTUP / SHUTDOWN & KEEP-ALIVE  ────────────
+
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and running!")
+        
+    # Suppress HTTP logging so UptimeRobot doesn't spam your terminal
+    def log_message(self, format, *args):
+        pass
+
+def keep_alive():
+    # Koyeb/Render assigns a dynamic PORT via env variables, defaults to 8080
+    port = int(os.environ.get("PORT", 8080)) 
+    server = HTTPServer(('0.0.0.0', port), DummyHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logger.info(f"🌐 Dummy web server started on port {port} for keep-alive")
+
+
 async def post_init(application) -> None:
     logger.info("Bot started. Verifying starting mode...")
     global current_bot_mode
@@ -591,6 +614,9 @@ async def post_init(application) -> None:
 
 def main() -> None:
     logger.info("🚀 Starting Deal Automation Bot")
+
+    # Start the dummy web server for Koyeb/Render/HuggingFace + UptimeRobot
+    keep_alive()
 
     app = (
         ApplicationBuilder()
