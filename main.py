@@ -69,6 +69,7 @@ SKIP_PATTERNS = [
     re.compile(r"https?://youtu\.?be\S*", re.I),
     re.compile(r"https?://(?:www\.)?youtube\.com/\S+", re.I),
     re.compile(r"@Thankukool_bot", re.I),
+    re.compile(r"\b(?:adidas|puma|tommy\s+hilfiger|h&m)\b", re.I),
 ]
 
 AMAZON_LINK   = re.compile(r"https?://(?:amzn\.to|(?:www\.)?amazon\.\w{2,3})/\S+", re.I)
@@ -170,6 +171,15 @@ def count_marketplace_links(text: str):
 def extract_price(text: str) -> Optional[str]:
     m = PRICE_PATTERN.search(text)
     return m.group(1).replace(",", "") if m else None
+
+
+def parse_price(price_str: Optional[str]) -> Optional[float]:
+    if not price_str:
+        return None
+    try:
+        return float(price_str)
+    except ValueError:
+        return None
 
 
 def has_coupon_bank_keywords(text: str) -> bool:
@@ -418,16 +428,22 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
     got_response = await wait_for_azfk_response(job, AZFK_FINAL_TIMEOUT)
 
     if not got_response or job.azfk_response_msg is None:
-        logger.warning("No response from @AzFkMathsbot - forwarding original to C-B")
-        await forward_original_to_channel_b(job, bot)
+        if has_coupon_bank_keywords(job.caption_text):
+            logger.warning("No response from @AzFkMathsbot & had coupon – dropping post.")
+        else:
+            logger.warning("No response from @AzFkMathsbot - forwarding original to C-B")
+            await forward_original_to_channel_b(job, bot)
         _cleanup_job(job)
         return
 
     response_text = extract_text(job.azfk_response_msg)
 
     if is_azfk_not_detected(response_text):
-        logger.info("@AzFkMathsbot: couldn't detect product – forwarding original to C-B")
-        await forward_original_to_channel_b(job, bot)
+        if has_coupon_bank_keywords(job.caption_text):
+            logger.warning("@AzFkMathsbot: couldn't detect product & had coupon – dropping post.")
+        else:
+            logger.info("@AzFkMathsbot: couldn't detect product – forwarding original to C-B")
+            await forward_original_to_channel_b(job, bot)
         _cleanup_job(job)
         return
 
@@ -444,15 +460,23 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
             job.retry_count += 1
             await send_to_azfk(job, bot)
             got_response2 = await wait_for_azfk_response(job, AZFK_FINAL_TIMEOUT)
+            
             if not got_response2 or job.azfk_response_msg is None:
-                logger.warning("Second attempt also failed – forwarding original to C-B")
-                await forward_original_to_channel_b(job, bot)
+                if has_coupon_bank_keywords(job.caption_text):
+                    logger.warning("Second attempt also failed & had coupon – dropping post.")
+                else:
+                    logger.warning("Second attempt also failed – forwarding original to C-B")
+                    await forward_original_to_channel_b(job, bot)
                 _cleanup_job(job)
                 return
+            
             response_text = extract_text(job.azfk_response_msg)
             if is_azfk_error(response_text):
-                logger.warning("Second attempt error – forwarding original to C-B")
-                await forward_original_to_channel_b(job, bot)
+                if has_coupon_bank_keywords(job.caption_text):
+                    logger.warning("Second attempt error & had coupon – dropping post.")
+                else:
+                    logger.warning("Second attempt error – forwarding original to C-B")
+                    await forward_original_to_channel_b(job, bot)
                 _cleanup_job(job)
                 return
 
@@ -488,10 +512,40 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
         if job.azfk_response_msg is None or is_azfk_error(
             extract_text(job.azfk_response_msg)
         ):
-            logger.warning("All retries exhausted – forwarding original to C-B")
-            await forward_original_to_channel_b(job, bot)
+            if has_coupon_bank_keywords(job.caption_text):
+                logger.warning("All retries exhausted (error) and had coupon – dropping post.")
+            else:
+                logger.warning("All retries exhausted – forwarding original to C-B")
+                await forward_original_to_channel_b(job, bot)
+            
             _cleanup_job(job)
+            if current_bot_mode != BotMode.STANDARD:
+                await ensure_mode(bot, BotMode.STANDARD)
             return
+
+    final_response_text = extract_text(job.azfk_response_msg)
+
+    # 1. Coupon Failure Drop
+    if has_coupon_bank_keywords(job.caption_text) and not has_coupon_bank_keywords(final_response_text):
+        logger.warning("Coupon missing from final bot response. Deal likely over. Dropping post.")
+        _cleanup_job(job)
+        if current_bot_mode != BotMode.STANDARD:
+            await ensure_mode(bot, BotMode.STANDARD)
+        return
+
+    # 2. Price Test Check Drop
+    if job.price is not None:
+        ca_price = parse_price(job.price)
+        cb_price_str = extract_price(final_response_text)
+        cb_price = parse_price(cb_price_str)
+        
+        if ca_price is not None and cb_price is not None:
+            if cb_price > ca_price:
+                logger.warning(f"Generated deal card price ({cb_price}) is > C-A price ({ca_price}). Dropping post.")
+                _cleanup_job(job)
+                if current_bot_mode != BotMode.STANDARD:
+                    await ensure_mode(bot, BotMode.STANDARD)
+                return
 
     await forward_azfk_to_channel_b(job, bot)
     _cleanup_job(job)
