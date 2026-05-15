@@ -490,6 +490,10 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
             logger.info(
                 f"Amazon cross-verify retry #{retries_done}: switching to {correction.value}"
             )
+            
+            # Anti-spam delay so bot doesn't reply instantly from cache
+            await asyncio.sleep(2) 
+
             job.mode_used = correction
             job.azfk_done = False
             job.azfk_response_msg = None
@@ -527,7 +531,7 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
 
     # 1. Coupon Failure Drop
     if has_coupon_bank_keywords(job.caption_text) and not has_coupon_bank_keywords(final_response_text):
-        logger.warning("Coupon missing from final bot response. Deal likely over. Dropping post.")
+        logger.warning("Coupon missing from final bot response after all retries. Deal likely over. Dropping post.")
         _cleanup_job(job)
         if current_bot_mode != BotMode.STANDARD:
             await ensure_mode(bot, BotMode.STANDARD)
@@ -541,7 +545,7 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
         
         if ca_price is not None and cb_price is not None:
             if cb_price > ca_price:
-                logger.warning(f"Generated deal card price ({cb_price}) is > C-A price ({ca_price}). Dropping post.")
+                logger.warning(f"Generated deal card price (₹{cb_price}) is > C-A price (₹{ca_price}). Dropping post.")
                 _cleanup_job(job)
                 if current_bot_mode != BotMode.STANDARD:
                     await ensure_mode(bot, BotMode.STANDARD)
@@ -620,6 +624,11 @@ async def on_bridge_group_message(update: Update, context: ContextTypes.DEFAULT_
         reply_id = msg.reply_to_message.message_id
         if reply_id in pending_jobs:
             matched_job = pending_jobs[reply_id]
+            
+            # RACE CONDITION FIX: Ignore late edits from @AzFkMathsbot that belong to older retries
+            if matched_job.sent_to_bridge_msg and reply_id != matched_job.sent_to_bridge_msg.message_id:
+                logger.info("Ignoring ghost edit/reply belonging to an older retry attempt.")
+                return
 
     if matched_job is None and pending_jobs:
         most_recent_key = max(pending_jobs.keys())
