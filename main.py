@@ -502,13 +502,24 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
             await send_to_azfk(job, bot)
             got = await wait_for_azfk_response(job, AZFK_FINAL_TIMEOUT)
 
-            if not got or job.azfk_response_msg is None or is_azfk_error(
-                extract_text(job.azfk_response_msg)
-            ):
-                logger.warning("Cross-verify retry failed")
+            if not got or job.azfk_response_msg is None:
+                logger.warning("Cross-verify retry failed (no response)")
                 break
-
+                
             response_text = extract_text(job.azfk_response_msg)
+
+            # --- THE FIX: Handle timeout during cross-verify ---
+            if is_azfk_timeout_error(response_text):
+                logger.info("Cross-verify: @AzFkMathsbot timed out – waiting 15s for delayed result")
+                await asyncio.sleep(15)
+                if job.azfk_response_msg:
+                    response_text = extract_text(job.azfk_response_msg)
+
+            if is_azfk_error(response_text):
+                logger.warning("Cross-verify retry failed with error. Retrying if attempts left.")
+                continue # Allows loop to actually use its 3 retries instead of breaking!
+            # ---------------------------------------------------
+
             correction = cross_verify_amazon_response(
                 job.caption_text, response_text, job.mode_used
             )
