@@ -183,7 +183,9 @@ def parse_price(price_str: Optional[str]) -> Optional[float]:
 
 
 def has_coupon_bank_keywords(text: str) -> bool:
-    return bool(COUPON_BANK_KEYWORDS.search(text))
+    # Remove URLs from the text first so domains like fkrt.cc don't trigger "cc" (credit card)
+    text_without_urls = URL_PATTERN.sub("", text)
+    return bool(COUPON_BANK_KEYWORDS.search(text_without_urls))
 
 
 def is_azfk_response_final(text: str) -> bool:
