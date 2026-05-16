@@ -544,7 +544,7 @@ async def _process_via_azfk(job: PendingJob, bot: Bot) -> None:
         cb_price = parse_price(cb_price_str)
         
         if ca_price is not None and cb_price is not None:
-            if cb_price > ca_price:
+            if cb_price > (ca_price + 10):  # Added ₹10 buffer here
                 logger.warning(f"Generated deal card price (₹{cb_price}) is > C-A price (₹{ca_price}). Dropping post.")
                 _cleanup_job(job)
                 if current_bot_mode != BotMode.STANDARD:
